@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, type RefObject } from 'react';
-import { Presentation, Loader2 } from 'lucide-react';
+import { Presentation, FileDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { trpc } from '../../lib/trpc';
+import pptxgen from 'pptxgenjs';
 import { ACCOUNT_COLORS } from './HandleInput';
 import { svgToPng } from '../../utils/svgToPng';
 
@@ -58,12 +58,11 @@ interface Props {
 
 // ─── Display helpers ──────────────────────────────────────────────────────────
 
-// Returns a short readable handle: slug for LinkedIn URLs, @handle for Instagram
 function displayHandle(handle: string): string {
   const h = handle.trim();
   if (h.toLowerCase().includes('linkedin.com/')) {
     const parts = h.replace(/^https?:\/\//i, '').split('/').filter(Boolean);
-    return parts[parts.length - 1] ?? h; // just the slug, e.g. "commvault"
+    return parts[parts.length - 1] ?? h;
   }
   return `@${h}`;
 }
@@ -106,8 +105,8 @@ function insightFollowers(accounts: RunResult[]): string {
   const valid = accounts.filter(a => a.accountRun.followers != null);
   if (valid.length === 0) return 'No follower data available.';
   const sorted = [...valid].sort((a, b) => (b.accountRun.followers ?? 0) - (a.accountRun.followers ?? 0));
-  const top = sorted[0];
-  const bottom = sorted[sorted.length - 1];
+  const top = sorted[0]!;
+  const bottom = sorted[sorted.length - 1]!;
   if (sorted.length === 1) return `${top.account.label} has ${fmt(top.accountRun.followers)} followers.`;
   const ratio = ((top.accountRun.followers ?? 0) / Math.max(bottom.accountRun.followers ?? 1, 1)).toFixed(1);
   return `${top.account.label} leads with ${fmt(top.accountRun.followers)} followers — ${ratio}× more than ${bottom.account.label} (${fmt(bottom.accountRun.followers)}).`;
@@ -117,7 +116,7 @@ function insightEngRate(accounts: RunResult[]): string {
   const valid = accounts.filter(a => a.accountRun.avg_engagement_rate != null);
   if (valid.length === 0) return 'No engagement rate data available.';
   const sorted = [...valid].sort((a, b) => (b.accountRun.avg_engagement_rate ?? 0) - (a.accountRun.avg_engagement_rate ?? 0));
-  const top = sorted[0];
+  const top = sorted[0]!;
   const self = accounts.find(a => a.account.is_self);
   let text = `${top.account.label} has the highest avg. engagement rate at ${fmtPct(top.accountRun.avg_engagement_rate)}.`;
   if (self && self.account.label !== top.account.label) {
@@ -130,7 +129,7 @@ function insightLikes(accounts: RunResult[]): string {
   const valid = accounts.filter(a => a.accountRun.avg_likes != null);
   if (valid.length === 0) return 'No likes data available.';
   const sorted = [...valid].sort((a, b) => (b.accountRun.avg_likes ?? 0) - (a.accountRun.avg_likes ?? 0));
-  const top = sorted[0];
+  const top = sorted[0]!;
   const avg = valid.reduce((s, a) => s + (a.accountRun.avg_likes ?? 0), 0) / valid.length;
   const pctAbove = avg > 0 ? (((top.accountRun.avg_likes ?? 0) / avg - 1) * 100).toFixed(0) : '0';
   if (valid.length === 1) return `${top.account.label} averages ${fmt(top.accountRun.avg_likes)} likes per post.`;
@@ -142,7 +141,7 @@ function insightViews(accounts: RunResult[]): string {
   const nullCount = accounts.length - valid.length;
   if (valid.length === 0) return 'No views data available (accounts may not post Reels/Videos).';
   const sorted = [...valid].sort((a, b) => (b.accountRun.avg_views ?? 0) - (a.accountRun.avg_views ?? 0));
-  const top = sorted[0];
+  const top = sorted[0]!;
   let text = `${top.account.label} leads with ${fmt(top.accountRun.avg_views)} avg. views per post.`;
   if (nullCount > 0) text += ` ${nullCount} account(s) have no views data (likely non-Reel content).`;
   return text;
@@ -157,7 +156,6 @@ function insightTrend(
   };
   const label = metricLabel[trendMetric] ?? trendMetric;
 
-  // Find account with most growth: compare first post vs last post for the metric
   const getVal = (p: PostResult) => {
     if (trendMetric === 'engagement') return p.engagement;
     if (trendMetric === 'engagement_rate') return p.engagement_rate ?? 0;
@@ -172,17 +170,29 @@ function insightTrend(
       const posts = [...a.posts].sort((x, y) =>
         new Date(x.published_at ?? 0).getTime() - new Date(y.published_at ?? 0).getTime()
       );
-      const first = getVal(posts[0]);
-      const last  = getVal(posts[posts.length - 1]);
+      const first = getVal(posts[0]!);
+      const last  = getVal(posts[posts.length - 1]!);
       return { label: a.account.label, delta: last - first, first, last };
     });
 
   if (improvements.length === 0) return `Showing ${label} trend across last 30 posts.`;
 
-  const best = improvements.sort((a, b) => b.delta - a.delta)[0];
+  const best = improvements.sort((a, b) => b.delta - a.delta)[0]!;
   const direction = best.delta >= 0 ? 'improved' : 'declined';
   const change = Math.abs(best.delta);
   return `Showing ${label} trend. ${best.label} ${direction} the most (${trendMetric === 'engagement_rate' ? fmtPct(change) : fmt(Math.round(change))} change from first to latest post).`;
+}
+
+// ─── Refs type (shared by both generators) ───────────────────────────────────
+
+interface ChartRefs {
+  followers:  RefObject<HTMLDivElement>;
+  engRate:    RefObject<HTMLDivElement>;
+  engagement: RefObject<HTMLDivElement>;
+  likes:      RefObject<HTMLDivElement>;
+  comments:   RefObject<HTMLDivElement>;
+  views:      RefObject<HTMLDivElement>;
+  trend:      RefObject<HTMLDivElement>;
 }
 
 // ─── HTML Presentation generator ─────────────────────────────────────────────
@@ -190,21 +200,12 @@ function insightTrend(
 async function generateHtmlPpt(
   data: RunData,
   setName: string,
-  refs: {
-    followers:  RefObject<HTMLDivElement>;
-    engRate:    RefObject<HTMLDivElement>;
-    engagement: RefObject<HTMLDivElement>;
-    likes:      RefObject<HTMLDivElement>;
-    comments:   RefObject<HTMLDivElement>;
-    views:      RefObject<HTMLDivElement>;
-    trend:      RefObject<HTMLDivElement>;
-  },
+  refs: ChartRefs,
   trendMetric: 'engagement' | 'engagement_rate' | 'likes' | 'views',
 ): Promise<string> {
   const accounts = data.results.filter(r => r.account != null);
   const runDate  = fmtDate(data.run.triggered_at);
 
-  // Capture all chart PNGs in parallel
   const [pngFollowers, pngEngRate, pngEngagement, pngLikes, pngComments, pngViews, pngTrend] = await Promise.all([
     refs.followers.current  ? svgToPng(refs.followers.current)  : Promise.resolve(null),
     refs.engRate.current    ? svgToPng(refs.engRate.current)    : Promise.resolve(null),
@@ -286,12 +287,10 @@ async function generateHtmlPpt(
   }
 
   // ── Slides 3–9: Chart slides ──────────────────────────────────────────
-  // Post Comparison (per-post metrics)
   slides.push(chartSlide('Avg. Engagement per Post', 'Average engagement (likes + comments) per post', pngEngagement, insightEngRate(accounts)));
   slides.push(chartSlide('Avg. Likes per Post', 'Average likes per post across scraped posts', pngLikes, insightLikes(accounts)));
   slides.push(chartSlide('Avg. Comments per Post', 'Average comments per post across scraped posts', pngComments, insightEngRate(accounts)));
   slides.push(chartSlide('Avg. Views per Post', 'Average views per post (Reels / Videos)', pngViews, insightViews(accounts)));
-  // Metric Breakdown (account-level)
   slides.push(chartSlide('Followers', 'Total follower count per account', pngFollowers, insightFollowers(accounts)));
   slides.push(chartSlide('Avg. Engagement Rate', 'Average engagement rate per post across scraped posts', pngEngRate, insightEngRate(accounts)));
 
@@ -305,7 +304,7 @@ async function generateHtmlPpt(
 
   // ── Slides 10+: Per-account post tables ──────────────────────────────
   for (let i = 0; i < accounts.length; i++) {
-    const r = accounts[i];
+    const r = accounts[i]!;
     const color = ACCOUNT_COLORS[i % ACCOUNT_COLORS.length];
     const posts = r.posts;
     const postRows = posts.length === 0
@@ -437,150 +436,301 @@ ${slides.join('\n')}
 </html>`;
 }
 
-// ─── HTML report generator (one run section) — unchanged ─────────────────────
+// ─── PowerPoint generator ─────────────────────────────────────────────────────
 
-function generateRunHtml(data: RunData, setName: string): string {
-  const runDate = fmtDate(data.run.triggered_at);
-  const accounts = data.results;
+async function generatePptx(
+  data: RunData,
+  setName: string,
+  refs: ChartRefs,
+  trendMetric: 'engagement' | 'engagement_rate' | 'likes' | 'views',
+): Promise<void> {
+  const accounts = data.results.filter(r => r.account != null);
+  const runDate  = fmtDate(data.run.triggered_at);
 
-  const kpiRows = accounts.map((r, i) => {
-    const color = ACCOUNT_COLORS[i % ACCOUNT_COLORS.length];
-    return `
-      <tr>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;"></span>
-          <strong>${r.account.label}</strong>
-          <span style="color:#888;font-size:12px;margin-left:6px;">${displayHandle(r.account.handle)}</span>
-        </td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmt(r.accountRun.followers)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmtPct(r.accountRun.avg_engagement_rate)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmt(r.accountRun.avg_engagement)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmt(r.accountRun.avg_views)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmt(r.accountRun.avg_likes)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">${fmt(r.accountRun.avg_comments)}</td>
-      </tr>`;
-  }).join('');
+  // Capture chart PNGs in parallel
+  const [pngFollowers, pngEngRate, pngEngagement, pngLikes, pngComments, pngViews, pngTrend] = await Promise.all([
+    refs.followers.current  ? svgToPng(refs.followers.current)  : Promise.resolve(null),
+    refs.engRate.current    ? svgToPng(refs.engRate.current)    : Promise.resolve(null),
+    refs.engagement.current ? svgToPng(refs.engagement.current) : Promise.resolve(null),
+    refs.likes.current      ? svgToPng(refs.likes.current)      : Promise.resolve(null),
+    refs.comments.current   ? svgToPng(refs.comments.current)   : Promise.resolve(null),
+    refs.views.current      ? svgToPng(refs.views.current)      : Promise.resolve(null),
+    refs.trend.current      ? svgToPng(refs.trend.current)      : Promise.resolve(null),
+  ]);
 
-  const postsPerAccount = accounts.map((r, i) => {
-    const color = ACCOUNT_COLORS[i % ACCOUNT_COLORS.length];
-    const postRows = r.posts.map(p => `
-      <tr>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">${fmtDate(p.published_at)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">${p.post_type ?? '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;text-align:right;">${fmt(p.likes)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;text-align:right;">${fmt(p.comments)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;text-align:right;">${fmt(p.views)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;text-align:right;">${fmt(p.engagement)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;text-align:right;">${fmtPct(p.engagement_rate)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">${p.content_bucket ?? '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">${p.sub_bucket ?? '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">${p.tags ?? '—'}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #f9f9f9;font-size:12px;">
-          ${p.post_url ? `<a href="${p.post_url}" target="_blank" style="color:#6366f1;">View</a>` : '—'}
-        </td>
-      </tr>`).join('');
+  const pres = new pptxgen();
+  pres.layout = 'LAYOUT_WIDE'; // 13.33 × 7.5 inches
+  pres.author = 'Grapes Worldwide Report Agent';
+  pres.company = 'Grapes Worldwide';
 
-    return `
-      <div style="margin-bottom:24px;">
-        <h4 style="margin:0 0 8px;font-size:14px;color:${color};">
-          ${r.account.label} <span style="color:#888;font-weight:normal;">@${r.account.handle}</span>
-        </h4>
-        <table style="width:100%;border-collapse:collapse;font-family:sans-serif;">
-          <thead>
-            <tr style="background:#f8f8f8;">
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Date</th>
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Type</th>
-              <th style="padding:6px 10px;text-align:right;font-size:11px;color:#666;">Likes</th>
-              <th style="padding:6px 10px;text-align:right;font-size:11px;color:#666;">Comments</th>
-              <th style="padding:6px 10px;text-align:right;font-size:11px;color:#666;">Views</th>
-              <th style="padding:6px 10px;text-align:right;font-size:11px;color:#666;">Engagement</th>
-              <th style="padding:6px 10px;text-align:right;font-size:11px;color:#666;">Eng. Rate</th>
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Bucket</th>
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Sub-bucket</th>
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Tags</th>
-              <th style="padding:6px 10px;text-align:left;font-size:11px;color:#666;">Link</th>
-            </tr>
-          </thead>
-          <tbody>${postRows}</tbody>
-        </table>
-      </div>`;
-  }).join('');
+  // ── Helper: add left accent stripe ───────────────────────────────────
+  function addAccentBar(slide: pptxgen.Slide, color = T.ACCENT) {
+    slide.addShape('rect', {
+      x: 0, y: 0, w: 0.08, h: 7.5,
+      fill: { color },
+      line: { type: 'none' },
+    });
+  }
 
-  return `
-<section class="run-report" data-run-id="${data.run.id}" style="margin-bottom:48px;padding-bottom:48px;border-bottom:2px solid #e5e7eb;">
-  <h2 style="font-size:18px;font-weight:600;color:#111827;margin:0 0 4px;">${setName}</h2>
-  <p style="font-size:13px;color:#6b7280;margin:0 0 24px;">Run on ${runDate}</p>
+  // ── Slide 1: Cover ────────────────────────────────────────────────────
+  {
+    const slide = pres.addSlide();
+    slide.background = { color: '4f46e5' };
+    slide.addText('COMPETITOR ANALYSIS REPORT', {
+      x: 0.5, y: 1.0, w: 12.3, h: 0.5,
+      fontSize: 11, bold: true, color: 'a5b4fc',
+      align: 'center', charSpacing: 4,
+    });
+    slide.addText(setName, {
+      x: 0.5, y: 1.6, w: 12.3, h: 1.8,
+      fontSize: 44, bold: true, color: 'FFFFFF',
+      align: 'center',
+    });
+    // Accent divider line
+    slide.addShape('rect', {
+      x: 6.17, y: 3.5, w: 1.0, h: 0.05,
+      fill: { color: 'a5b4fc' },
+      line: { type: 'none' },
+    });
+    // Account names
+    const accountList = accounts.map(r => r.account.label).join('  •  ');
+    slide.addText(accountList, {
+      x: 0.5, y: 3.7, w: 12.3, h: 0.6,
+      fontSize: 12, color: 'c7d2fe', align: 'center',
+    });
+    slide.addText(`Run date: ${runDate}`, {
+      x: 0.5, y: 6.8, w: 12.3, h: 0.4,
+      fontSize: 11, color: 'a5b4fc', align: 'center',
+    });
+  }
 
-  <h3 style="font-size:14px;font-weight:600;color:#374151;margin:0 0 10px;">KPI Overview</h3>
-  <table style="width:100%;border-collapse:collapse;font-family:sans-serif;margin-bottom:32px;">
-    <thead>
-      <tr style="background:#f9fafb;">
-        <th style="padding:8px 12px;text-align:left;font-size:12px;color:#6b7280;font-weight:600;">Account</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Followers</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Avg. Eng. Rate</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Avg. Engagement</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Avg. Views</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Avg. Likes</th>
-        <th style="padding:8px 12px;text-align:right;font-size:12px;color:#6b7280;font-weight:600;">Avg. Comments</th>
-      </tr>
-    </thead>
-    <tbody>${kpiRows}</tbody>
-  </table>
+  // ── Slide 2: KPI Overview ─────────────────────────────────────────────
+  {
+    const slide = pres.addSlide();
+    slide.background = { color: T.BG };
+    addAccentBar(slide);
+    slide.addText('KPI Overview', {
+      x: 0.35, y: 0.25, w: 12.6, h: 0.7,
+      fontSize: 26, bold: true, color: T.TITLE,
+    });
 
-  <h3 style="font-size:14px;font-weight:600;color:#374151;margin:0 0 12px;">Top Posts per Account</h3>
-  ${postsPerAccount}
-</section>`;
+    const hOpts = { bold: true, color: 'FFFFFF', fill: { color: T.ACCENT } };
+    const headerRow = [
+      { text: 'Account',         options: { ...hOpts, align: 'left'  as const } },
+      { text: 'Followers',       options: { ...hOpts, align: 'right' as const } },
+      { text: 'Avg. Eng. Rate',  options: { ...hOpts, align: 'right' as const } },
+      { text: 'Avg. Engagement', options: { ...hOpts, align: 'right' as const } },
+      { text: 'Avg. Views',      options: { ...hOpts, align: 'right' as const } },
+      { text: 'Avg. Likes',      options: { ...hOpts, align: 'right' as const } },
+      { text: 'Avg. Comments',   options: { ...hOpts, align: 'right' as const } },
+    ];
+
+    const dataRows = accounts.map((r, idx) => {
+      const fill = { color: idx % 2 === 0 ? T.BG : T.ROW_ALT };
+      const dOpts = { fill, color: T.BODY };
+      return [
+        { text: `${r.account.label}  ${displayHandle(r.account.handle)}`, options: { ...dOpts, align: 'left'  as const } },
+        { text: fmt(r.accountRun.followers),           options: { ...dOpts, align: 'right' as const } },
+        { text: fmtPct(r.accountRun.avg_engagement_rate), options: { ...dOpts, align: 'right' as const } },
+        { text: fmt(r.accountRun.avg_engagement),      options: { ...dOpts, align: 'right' as const } },
+        { text: fmt(r.accountRun.avg_views),           options: { ...dOpts, align: 'right' as const } },
+        { text: fmt(r.accountRun.avg_likes),           options: { ...dOpts, align: 'right' as const } },
+        { text: fmt(r.accountRun.avg_comments),        options: { ...dOpts, align: 'right' as const } },
+      ];
+    });
+
+    slide.addTable([headerRow, ...dataRows], {
+      x: 0.35, y: 1.1, w: 12.6,
+      colW: [3.0, 1.5, 1.8, 2.0, 1.5, 1.5, 1.3],
+      border: { type: 'solid', pt: 1, color: T.BORDER },
+      fontSize: 11,
+    });
+  }
+
+  // ── Helper: add chart slide ───────────────────────────────────────────
+  function addChartSlide(title: string, subtitle: string, png: string | null, insight: string) {
+    const slide = pres.addSlide();
+    slide.background = { color: T.BG };
+    addAccentBar(slide);
+    slide.addText(title, {
+      x: 0.35, y: 0.25, w: 12.6, h: 0.65,
+      fontSize: 26, bold: true, color: T.TITLE,
+    });
+    slide.addText(subtitle, {
+      x: 0.35, y: 0.9, w: 12.6, h: 0.35,
+      fontSize: 12, color: T.MUTED,
+    });
+    if (png) {
+      slide.addImage({ data: png, x: 0.35, y: 1.35, w: 12.6, h: 4.1 });
+    } else {
+      slide.addText('No data available', {
+        x: 0.35, y: 1.35, w: 12.6, h: 4.1,
+        fontSize: 16, color: T.MUTED, align: 'center', valign: 'middle',
+      });
+    }
+    // Insight box background
+    slide.addShape('rect', {
+      x: 0.35, y: 5.6, w: 12.6, h: 1.55,
+      fill: { color: T.LIGHT },
+      line: { type: 'solid', color: T.ACCENT, pt: 2 },
+    });
+    slide.addText([
+      { text: 'Insight: ', options: { bold: true } },
+      { text: insight },
+    ], {
+      x: 0.55, y: 5.7, w: 12.2, h: 1.35,
+      fontSize: 11, color: '3730a3',
+    });
+  }
+
+  // ── Slides 3–9: Chart slides ──────────────────────────────────────────
+  const trendLabel: Record<string, string> = { engagement: 'Engagement', engagement_rate: 'Engagement Rate', likes: 'Likes', views: 'Views' };
+  addChartSlide('Avg. Engagement per Post',   'Average engagement (likes + comments) per post',            pngEngagement, insightEngRate(accounts));
+  addChartSlide('Avg. Likes per Post',        'Average likes per post across scraped posts',               pngLikes,      insightLikes(accounts));
+  addChartSlide('Avg. Comments per Post',     'Average comments per post across scraped posts',            pngComments,   insightEngRate(accounts));
+  addChartSlide('Avg. Views per Post',        'Average views per post (Reels / Videos)',                   pngViews,      insightViews(accounts));
+  addChartSlide('Followers',                  'Total follower count per account',                          pngFollowers,  insightFollowers(accounts));
+  addChartSlide('Avg. Engagement Rate',       'Average engagement rate per post across scraped posts',     pngEngRate,    insightEngRate(accounts));
+  addChartSlide(
+    `Engagement Trend — ${trendLabel[trendMetric] ?? trendMetric}`,
+    'Metric plotted across last 30 posts by post index (oldest → newest)',
+    pngTrend,
+    insightTrend(accounts, trendMetric),
+  );
+
+  // ── Slides 10+: Per-account post tables ──────────────────────────────
+  for (let i = 0; i < accounts.length; i++) {
+    const r = accounts[i]!;
+    const rawColor = ACCOUNT_COLORS[i % ACCOUNT_COLORS.length] ?? '#6366f1';
+    const acctColor = rawColor.replace('#', '');
+    const slide = pres.addSlide();
+    slide.background = { color: T.BG };
+    addAccentBar(slide, acctColor);
+
+    slide.addText(r.account.label, {
+      x: 0.35, y: 0.2, w: 9, h: 0.55,
+      fontSize: 22, bold: true, color: acctColor,
+    });
+    slide.addText(displayHandle(r.account.handle), {
+      x: 0.35, y: 0.72, w: 12.6, h: 0.35,
+      fontSize: 11, color: T.MUTED,
+    });
+    slide.addText(
+      `Followers: ${fmt(r.accountRun.followers)}   ·   Avg. Eng. Rate: ${fmtPct(r.accountRun.avg_engagement_rate)}   ·   Avg. Engagement: ${fmt(r.accountRun.avg_engagement)}`,
+      { x: 0.35, y: 1.0, w: 12.6, h: 0.3, fontSize: 10, color: T.MUTED },
+    );
+
+    const pH = { bold: true, color: 'FFFFFF', fill: { color: T.ACCENT } };
+    const postHeaderRow = [
+      { text: 'Date',        options: { ...pH, align: 'left'  as const } },
+      { text: 'Type',        options: { ...pH, align: 'left'  as const } },
+      { text: 'Likes',       options: { ...pH, align: 'right' as const } },
+      { text: 'Comments',    options: { ...pH, align: 'right' as const } },
+      { text: 'Views',       options: { ...pH, align: 'right' as const } },
+      { text: 'Engagement',  options: { ...pH, align: 'right' as const } },
+      { text: 'Eng. Rate',   options: { ...pH, align: 'right' as const } },
+      { text: 'Bucket',      options: { ...pH, align: 'left'  as const } },
+      { text: 'Sub-bucket',  options: { ...pH, align: 'left'  as const } },
+      { text: 'Tags',        options: { ...pH, align: 'left'  as const } },
+    ];
+
+    const postDataRows = r.posts.length === 0
+      ? [[{ text: 'No posts available', options: { colspan: 10, align: 'center' as const, color: T.MUTED, fill: { color: T.BG } } }]]
+      : r.posts.map((p, j) => {
+          const fill = { color: j % 2 === 0 ? T.BG : T.ROW_ALT };
+          const dP = { fill, color: T.BODY };
+          return [
+            { text: fmtDate(p.published_at),    options: { ...dP, align: 'left'  as const } },
+            { text: p.post_type ?? '—',          options: { ...dP, align: 'left'  as const } },
+            { text: fmt(p.likes),                options: { ...dP, align: 'right' as const } },
+            { text: fmt(p.comments),             options: { ...dP, align: 'right' as const } },
+            { text: fmt(p.views),                options: { ...dP, align: 'right' as const } },
+            { text: fmt(p.engagement),           options: { ...dP, align: 'right' as const } },
+            { text: fmtPct(p.engagement_rate),   options: { ...dP, align: 'right' as const } },
+            { text: p.content_bucket ?? '—',     options: { ...dP, align: 'left'  as const } },
+            { text: p.sub_bucket ?? '—',         options: { ...dP, align: 'left'  as const } },
+            { text: p.tags ?? '—',               options: { ...dP, align: 'left'  as const } },
+          ];
+        });
+
+    slide.addTable([postHeaderRow, ...postDataRows], {
+      x: 0.35, y: 1.4, w: 12.6,
+      colW: [1.3, 0.8, 1.0, 1.1, 0.9, 1.2, 1.0, 1.8, 1.8, 1.7],
+      border: { type: 'solid', pt: 1, color: T.BORDER },
+      fontSize: 9,
+      rowH: 0.22,
+    });
+  }
+
+  // ── Last slide: Thank You ─────────────────────────────────────────────
+  {
+    const slide = pres.addSlide();
+    slide.background = { color: '4f46e5' };
+    slide.addText('Thank You', {
+      x: 0.5, y: 2.4, w: 12.3, h: 1.5,
+      fontSize: 48, bold: true, color: 'FFFFFF', align: 'center',
+    });
+    slide.addShape('rect', {
+      x: 6.17, y: 4.1, w: 1.0, h: 0.05,
+      fill: { color: 'a5b4fc' },
+      line: { type: 'none' },
+    });
+    slide.addText('Report generated by Grapes Worldwide Report Agent', {
+      x: 0.5, y: 4.3, w: 12.3, h: 0.5,
+      fontSize: 13, color: 'c7d2fe', align: 'center',
+    });
+    slide.addText(runDate, {
+      x: 0.5, y: 4.9, w: 12.3, h: 0.4,
+      fontSize: 11, color: 'a5b4fc', align: 'center',
+    });
+  }
+
+  const fileName = `${setName.replace(/\s+/g, '-')}-competitor-${new Date().toISOString().slice(0, 10)}.pptx`;
+  await pres.writeFile({ fileName });
 }
-
-const HTML_SHELL = (setName: string, body: string) => `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${setName} — Competitor Analysis</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1100px; margin: 0 auto; padding: 32px 24px; color: #111827; background: #fff; }
-    h1 { font-size: 24px; font-weight: 700; color: #111827; margin: 0 0 8px; }
-    .meta { font-size: 13px; color: #6b7280; margin: 0 0 40px; }
-  </style>
-</head>
-<body>
-  <h1>${setName} — Competitor Analysis Report</h1>
-  <p class="meta">Generated by Report-Making-Agent</p>
-  <div id="runs">
-${body}
-  </div>
-</body>
-</html>`;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ExportPPTButton({
-  resultsData, activeSetId, setName,
+  resultsData, activeSetId: _activeSetId, setName,
   refFollowers, refEngRate, refEngagement, refLikes, refComments, refViews, refTrend,
   trendMetric,
 }: Props) {
   const [open, setOpen]       = useState(false);
-  const [loading, setLoading] = useState<'ppt' | 'html' | null>(null);
-
-  const getHtmlReport  = trpc.competitor.getHtmlReport.useQuery(
-    { setId: activeSetId! },
-    { enabled: false },
-  );
-  const saveHtmlReport = trpc.competitor.saveHtmlReport.useMutation();
+  const [loading, setLoading] = useState<'pptx' | 'html' | null>(null);
 
   const disabled = !resultsData || resultsData.run.status !== 'completed' || resultsData.results.length === 0;
 
-  async function handleMakeNew() {
+  const chartRefs: ChartRefs = {
+    followers:  refFollowers,
+    engRate:    refEngRate,
+    engagement: refEngagement,
+    likes:      refLikes,
+    comments:   refComments,
+    views:      refViews,
+    trend:      refTrend,
+  };
+
+  async function handleMakePptx() {
     if (!resultsData) return;
-    setLoading('ppt');
+    setLoading('pptx');
     try {
-      const html = await generateHtmlPpt(
-        resultsData,
-        setName,
-        { followers: refFollowers, engRate: refEngRate, engagement: refEngagement, likes: refLikes, comments: refComments, views: refViews, trend: refTrend },
-        trendMetric,
-      );
+      await generatePptx(resultsData, setName, chartRefs, trendMetric);
+      toast.success('PowerPoint downloaded');
+      setOpen(false);
+    } catch (err) {
+      toast.error('Failed to generate PowerPoint');
+      console.error(err);
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  async function handleMakeHtml() {
+    if (!resultsData) return;
+    setLoading('html');
+    try {
+      const html = await generateHtmlPpt(resultsData, setName, chartRefs, trendMetric);
       const blob = new Blob([html], { type: 'text/html' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -598,98 +748,58 @@ export function ExportPPTButton({
     }
   }
 
-  async function handleAddToAnalysis() {
-    if (!resultsData || !activeSetId) return;
-    setLoading('html');
-    try {
-      const newSection = generateRunHtml(resultsData, setName);
-
-      const { data } = await getHtmlReport.refetch();
-      const existing = data?.html ?? null;
-
-      let combined: string;
-      if (existing) {
-        const insertAfter = '<div id="runs">';
-        const idx = existing.indexOf(insertAfter);
-        if (idx !== -1) {
-          combined = existing.slice(0, idx + insertAfter.length) + '\n' + newSection + existing.slice(idx + insertAfter.length);
-        } else {
-          combined = existing.replace('</body>', newSection + '\n</body>');
-        }
-      } else {
-        combined = HTML_SHELL(setName, newSection);
-      }
-
-      await saveHtmlReport.mutateAsync({ setId: activeSetId, html: combined });
-
-      const blob = new Blob([combined], { type: 'text/html' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
-      a.download = `${setName.replace(/\s+/g, '-')}-analysis.html`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      toast.success('Analysis HTML updated and downloaded');
-      setOpen(false);
-    } catch (err) {
-      toast.error('Failed to update analysis HTML');
-      console.error(err);
-    } finally {
-      setLoading(null);
-    }
-  }
-
   return (
     <div className="relative">
       <button
         onClick={() => setOpen(o => !o)}
         disabled={disabled}
         className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed print:hidden"
-        title={disabled ? 'Run an analysis first to export' : 'Export as PowerPoint or HTML report'}
+        title={disabled ? 'Run an analysis first to export' : 'Export as PowerPoint or HTML'}
       >
         <Presentation size={14} />
-        Make PPT
+        Export
       </button>
 
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
 
-          <div className="absolute right-0 top-full mt-1.5 z-50 w-56 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+          <div className="absolute right-0 top-full mt-1.5 z-50 w-60 rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
             <div className="px-3 py-2 border-b border-gray-100">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Export Options</p>
             </div>
 
+            {/* Make PowerPoint */}
             <button
-              onClick={handleMakeNew}
+              onClick={handleMakePptx}
               disabled={loading !== null}
               className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-indigo-50 transition-colors text-left disabled:opacity-50"
             >
-              {loading === 'ppt' ? (
+              {loading === 'pptx' ? (
                 <Loader2 size={16} className="mt-0.5 text-indigo-500 animate-spin shrink-0" />
               ) : (
                 <Presentation size={16} className="mt-0.5 text-indigo-500 shrink-0" />
               )}
               <div>
-                <p className="text-sm font-medium text-gray-800">Make HTML Presentation</p>
-                <p className="text-xs text-gray-500">Download a browser-viewable slideshow</p>
+                <p className="text-sm font-medium text-gray-800">Make PowerPoint</p>
+                <p className="text-xs text-gray-500">Download a real .pptx file</p>
               </div>
             </button>
 
+            {/* Make HTML */}
             <button
-              onClick={handleAddToAnalysis}
+              onClick={handleMakeHtml}
               disabled={loading !== null}
               className="w-full flex items-start gap-2.5 px-3 py-2.5 hover:bg-indigo-50 transition-colors text-left disabled:opacity-50 border-t border-gray-100"
             >
               {loading === 'html' ? (
                 <Loader2 size={16} className="mt-0.5 text-teal-500 animate-spin shrink-0" />
               ) : (
-                <span className="mt-0.5 w-4 h-4 rounded shrink-0 bg-teal-100 flex items-center justify-center text-teal-600 text-[10px] font-bold">+</span>
+                <FileDown size={16} className="mt-0.5 text-teal-500 shrink-0" />
               )}
               <div>
-                <p className="text-sm font-medium text-gray-800">Add to Analysis HTML</p>
-                <p className="text-xs text-gray-500">Append to the saved report for this set</p>
+                <p className="text-sm font-medium text-gray-800">Make HTML</p>
+                <p className="text-xs text-gray-500">Download a browser-viewable slideshow</p>
               </div>
             </button>
           </div>

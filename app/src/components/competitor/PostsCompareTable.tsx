@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { ExternalLink, Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { ExternalLink, Info, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { ACCOUNT_COLORS } from './HandleInput';
 import { fmtNum, fmtPct, fmtDate } from '../../utils/formatters';
 import { Tooltip } from '../Tooltip';
@@ -111,6 +111,35 @@ function EditCell({ value, placeholder = '—', onSave }: EditCellProps) {
   );
 }
 
+// ─── CSV download ────────────────────────────────────────────────────────────
+
+function downloadCsv(a: AccountPosts) {
+  const header = ['Date', 'Type', 'Likes', 'Comments', 'Views', 'Engagement', 'Eng. Rate', 'Bucket', 'Sub-bucket', 'Tags', 'URL'];
+  const rows = a.posts.map(p => [
+    p.published_at ?? '',
+    p.post_type ?? '',
+    String(p.likes),
+    String(p.comments),
+    p.views != null ? String(p.views) : '',
+    String(p.engagement),
+    p.engagement_rate != null ? (p.engagement_rate * 100).toFixed(2) + '%' : '',
+    p.content_bucket ?? '',
+    p.sub_bucket ?? '',
+    p.tags ?? '',
+    p.post_url ?? '',
+  ]);
+  const csv = [header, ...rows]
+    .map(r => r.map(v => `"${v.replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href     = url;
+  link.download = `${a.label.replace(/\s+/g, '-')}-posts.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export function PostsCompareTable({ accounts, onUpdatePost }: Props) {
@@ -136,22 +165,31 @@ export function PostsCompareTable({ accounts, onUpdatePost }: Props) {
         return (
           <div key={a.handle} className="rounded-xl border border-gray-100 overflow-hidden">
             {/* ── Accordion header ── */}
-            <button
-              onClick={() => toggleAccount(a.handle)}
-              className="w-full flex items-center gap-2 px-4 py-3 bg-white hover:bg-gray-50 transition-colors text-left"
-            >
-              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <span className="text-sm font-semibold text-gray-800">{a.label}</span>
-              <Tooltip content={a.handle} position="top">
-                <span className="text-xs text-gray-400">{displayHandle(a.handle)}</span>
-              </Tooltip>
-              <span className="ml-1 text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">
-                {postCount} post{postCount !== 1 ? 's' : ''}
-              </span>
-              <span className="ml-auto text-gray-400">
-                {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-              </span>
-            </button>
+            <div className="flex items-center bg-white border-b border-transparent hover:bg-gray-50 transition-colors">
+              <button
+                onClick={() => toggleAccount(a.handle)}
+                className="flex-1 flex items-center gap-2 px-4 py-3 text-left"
+              >
+                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                <span className="text-sm font-semibold text-gray-800">{a.label}</span>
+                <Tooltip content={a.handle} position="top">
+                  <span className="text-xs text-gray-400">{displayHandle(a.handle)}</span>
+                </Tooltip>
+                <span className="ml-1 text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">
+                  {postCount} post{postCount !== 1 ? 's' : ''}
+                </span>
+                <span className="ml-auto text-gray-400">
+                  {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                </span>
+              </button>
+              <button
+                onClick={() => downloadCsv(a)}
+                title={`Download ${a.label} posts as CSV`}
+                className="px-3 py-3 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors border-l border-gray-100 shrink-0"
+              >
+                <Download size={13} />
+              </button>
+            </div>
 
             {/* ── Table body (shown when expanded) ── */}
             {expanded && (

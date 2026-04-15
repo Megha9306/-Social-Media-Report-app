@@ -1,0 +1,49 @@
+name = "social-report-agent"
+main = "src/worker.ts"
+compatibility_date = "2024-01-01"
+
+[triggers]
+crons = ["*/30 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "social-reports"
+database_id = "28a04f9b-9518-4496-9f65-158b09dd725c"
+
+[[kv_namespaces]]
+binding = "REPORT_CACHE"
+id = "bd8a1e44c8bb4b999ad09689f64905f2"
+
+
+[[queues.producers]]
+binding = "SCRAPE_QUEUE"
+queue = "scrape-batch-queue"
+
+[[queues.consumers]]
+queue = "scrape-batch-queue"
+max_batch_size = 5
+max_retries = 3
+dead_letter_queue = "scrape-dlq"
+
+[durable_objects]
+bindings = [
+  { name = "SCRAPE_STATUS", class_name = "ScrapeStatusDO" },
+  { name = "SCHEDULER", class_name = "SchedulerDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ScrapeStatusDO"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["SchedulerDO"]
+
+[vars]
+SMART_SCHEDULE_FRESH_HOURS = "4"
+SMART_SCHEDULE_RECENT_HOURS = "24"
+SMART_SCHEDULE_OLD_HOURS = "168"
+WORKER_URL = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev"
+
+# Secrets — set via: wrangler secret put APIFY_TOKEN
+# APIFY_TOKEN

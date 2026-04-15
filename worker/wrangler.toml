@@ -1,0 +1,75 @@
+name = "social-report-agent"
+main = "src/worker.ts"
+compatibility_date = "2024-12-01"
+workers_dev = true
+
+[triggers]
+crons = ["*/30 * * * *", "0 23 28-31 * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "social-reports"
+database_id = "28a04f9b-9518-4496-9f65-158b09dd725c"
+
+[[kv_namespaces]]
+binding = "REPORT_CACHE"
+id = "bd8a1e44c8bb4b999ad09689f64905f2"
+
+
+[[queues.producers]]
+binding = "SCRAPE_QUEUE"
+queue = "scrape-batch-queue"
+
+[[queues.consumers]]
+queue = "scrape-batch-queue"
+max_batch_size = 5
+max_retries = 3
+dead_letter_queue = "scrape-dlq"
+
+[durable_objects]
+bindings = [
+  { name = "SCRAPE_STATUS", class_name = "ScrapeStatusDO" },
+  { name = "SCHEDULER",     class_name = "SchedulerDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ScrapeStatusDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["SchedulerDO"]
+
+[vars]
+SMART_SCHEDULE_FRESH_HOURS = "4"
+SMART_SCHEDULE_RECENT_HOURS = "24"
+SMART_SCHEDULE_OLD_HOURS = "168"
+WORKER_URL = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev"
+
+# App URL (used for OAuth redirect back to settings page)
+APP_URL = "https://your-app.vercel.app"
+
+# OAuth — Meta (Instagram + Facebook)
+META_APP_ID = "your_meta_app_id"
+META_REDIRECT_URI = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev/api/auth/meta/callback"
+
+# OAuth — LinkedIn
+LINKEDIN_CLIENT_ID = "your_linkedin_client_id"
+LINKEDIN_REDIRECT_URI = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev/api/auth/linkedin/callback"
+
+# OAuth — Twitter/X
+TWITTER_CLIENT_ID = "your_twitter_client_id"
+TWITTER_REDIRECT_URI = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev/api/auth/twitter/callback"
+
+# OAuth — YouTube / Google
+GOOGLE_CLIENT_ID = "your_google_client_id"
+GOOGLE_REDIRECT_URI = "https://social-report-agent.YOUR_SUBDOMAIN.workers.dev/api/auth/youtube/callback"
+
+# Secrets — set each via: wrangler secret put <NAME>
+# APIFY_TOKEN
+# API_KEY                   (used to authenticate tRPC requests)
+# WEBHOOK_SECRET            (used to verify Apify webhook signatures)
+# META_APP_SECRET
+# LINKEDIN_CLIENT_SECRET
+# TWITTER_CLIENT_SECRET
+# GOOGLE_CLIENT_SECRET

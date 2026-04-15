@@ -1,0 +1,21 @@
+node_modules/
+.next/
+.wrangler/
+dist/
+*.env
+*.env.local
+.dev.vars
+.DS_Store
+
+# Logs
+*.log
+*.err.log
+
+# Build info
+*.tsbuildinfo
+
+# Claude Code internals
+.claude/
+
+# Internal planning docs
+PLAN-*.md

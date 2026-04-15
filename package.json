@@ -1,0 +1,23 @@
+{
+  "name": "social-report-agent-3z",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "app",
+    "worker"
+  ],
+  "scripts": {
+    "dev:worker": "cd worker && wrangler dev",
+    "dev:app": "cd app && next dev",
+    "dev": "concurrently \"npm run dev:worker\" \"npm run dev:app\"",
+    "build:app": "cd app && next build",
+    "deploy:worker": "cd worker && wrangler deploy",
+    "db:migrate": "node worker/scripts/migrate-d1.mjs --local",
+    "db:migrate:local": "node worker/scripts/migrate-d1.mjs --local",
+    "db:migrate:remote": "node worker/scripts/migrate-d1.mjs --remote"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "wrangler": "^4.78.0"
+  }
+}

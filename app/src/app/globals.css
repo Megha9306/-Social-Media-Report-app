@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+}
+
+/* ─── Print / PDF export ─────────────────────────────────────────── */
+@media print {
+  /* Hide nav, buttons, filters */
+  nav,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Full-width layout */
+  body {
+    background: #fff !important;
+  }
+
+  main {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Ensure chart cards don't break across pages */
+  .rounded-2xl {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Reset shadows */
+  .shadow-sm,
+  .shadow-md,
+  .shadow-lg {
+    box-shadow: none !important;
+  }
+}
+
+/* Thin scrollbar for the report table */
+.overflow-x-auto::-webkit-scrollbar {
+  height: 6px;
+}
+.overflow-x-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+.overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #e5e7eb;
+  border-radius: 3px;
+}
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background: #d1d5db;
+}

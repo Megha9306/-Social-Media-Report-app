@@ -68,6 +68,8 @@ export function normalizeHandle(raw: string): string {
   let h = raw.trim().replace(/^@/, '');
   // strip full URL prefixes
   h = h.replace(/^https?:\/\/(www\.)?instagram\.com\//i, '');
+  // strip query params (e.g. ?igsh=...)
+  h = h.split('?')[0] ?? h;
   // strip trailing slash or path
   h = h.split('/')[0] ?? h;
   return h.toLowerCase();

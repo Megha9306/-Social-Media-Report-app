@@ -699,7 +699,8 @@ export function ExportPPTButton({
   const [open, setOpen]       = useState(false);
   const [loading, setLoading] = useState<'pptx' | 'html' | null>(null);
 
-  const disabled = !resultsData || resultsData.run.status !== 'completed' || resultsData.results.length === 0;
+  const done = resultsData?.run.status === 'completed' || resultsData?.run.status === 'partial';
+  const disabled = !resultsData || !done || resultsData.results.length === 0;
 
   const chartRefs: ChartRefs = {
     followers:  refFollowers,

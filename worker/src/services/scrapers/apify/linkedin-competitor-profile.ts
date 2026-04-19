@@ -19,6 +19,8 @@ function isCompanyUrl(raw: string): boolean {
 // Normalise to canonical path: linkedin.com/company/slug  or  linkedin.com/in/slug
 export function normalizeLinkedInHandle(raw: string): string {
   let h = raw.trim().replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+  // strip query params (e.g. ?trk=..., ?lipi=...)
+  h = h.split('?')[0] ?? h;
   if (!h.toLowerCase().includes('linkedin.com/')) throw new Error(`Not a LinkedIn URL: ${raw}`);
   const parts = h.split('/').filter(Boolean);
   return parts.slice(0, 3).join('/');   // ['linkedin.com', 'company'|'in', 'slug']
